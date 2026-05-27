@@ -101,4 +101,15 @@ public interface ClickToMinimizeConfig extends Config
 			position = 8
 	)
 	default boolean logPlayerActions() { return false; }
+
+	@ConfigItem(
+			keyName = "sendToBack",
+			name = "Send to Back instead of Minimize",
+			description = "Sends the window to the back instead of minimizing it",
+			position = 9
+	)
+	default boolean sendToBack()
+	{
+		return false;
+	}
 }

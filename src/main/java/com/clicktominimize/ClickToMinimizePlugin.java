@@ -132,7 +132,11 @@ public class ClickToMinimizePlugin extends Plugin
 
 		JFrame frame = (JFrame) javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas());
 		if (frame != null) {
-			frame.setState(Frame.ICONIFIED);
+			if (config.sendToBack()) {
+				frame.toBack();
+			} else {
+				frame.setState(Frame.ICONIFIED);
+			}
 
 			long currentTime = System.nanoTime();
 			// Check if enough time has passed since the last message (5 seconds)
