@@ -1,156 +1,212 @@
 package com.clicktominimize;
 
 import com.google.inject.Provides;
-import javax.inject.Inject;
-import lombok.extern.slf4j.Slf4j;
-import net.runelite.api.ChatMessageType;
-import net.runelite.api.Client;
-import net.runelite.api.InventoryID;
-import net.runelite.api.events.MenuOptionClicked;
-import net.runelite.client.chat.ChatMessageManager;
-import net.runelite.client.chat.QueuedMessage;
-import net.runelite.client.config.ConfigManager;
-import net.runelite.client.eventbus.Subscribe;
-import net.runelite.client.input.KeyManager;
-import net.runelite.client.plugins.Plugin;
-import net.runelite.client.plugins.PluginDescriptor;
-
-import javax.swing.JFrame;
 import java.awt.Frame;
-
+import java.awt.event.KeyEvent;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
+import javax.inject.Inject;
+import javax.swing.JFrame;
+import net.runelite.api.ChatMessageType;
+import net.runelite.api.Client;
+import net.runelite.api.events.MenuOptionClicked;
+import net.runelite.api.gameval.InventoryID;
+import net.runelite.client.chat.ChatMessageManager;
+import net.runelite.client.chat.QueuedMessage;
+import net.runelite.client.config.ConfigManager;
+import net.runelite.client.eventbus.Subscribe;
+import net.runelite.client.events.ConfigChanged;
+import net.runelite.client.input.KeyListener;
+import net.runelite.client.input.KeyManager;
+import net.runelite.client.plugins.Plugin;
+import net.runelite.client.plugins.PluginDescriptor;
 import static net.runelite.client.util.Text.removeTags;
 
-@Slf4j
 @PluginDescriptor(
-		name = "Click To Minimize"
+	name = "Click To Minimize"
 )
-public class ClickToMinimizePlugin extends Plugin
+public class ClickToMinimizePlugin extends Plugin implements KeyListener
 {
 	@Inject
 	private Client client;
-
 	@Inject
 	private ClickToMinimizeConfig config;
-
 	@Inject
 	private KeyManager keyManager;
-
-	@Inject
-	private ClickToMinimizeKeyListener keyListener;
-
 	@Inject
 	private ChatMessageManager chatMessageManager;
 
-	private long lastMessageTime = 0;
+	private final Map<String, List<String>> actionsMap = new HashMap<>();
+
+	private boolean preventMinimize = false;
 
 	@Override
-	protected void startUp() throws Exception
+	protected void startUp()
 	{
-		log.info("Click To Minimize started!");
-		keyManager.registerKeyListener(keyListener);
+		keyManager.registerKeyListener(this);
+		updateActions();
 	}
 
 	@Override
-	protected void shutDown() throws Exception
+	protected void shutDown()
 	{
-		keyManager.unregisterKeyListener(keyListener);
-		log.info("Click To Minimize stopped!");
+		keyManager.unregisterKeyListener(this);
+		actionsMap.clear();
+		preventMinimize = false;
+	}
+
+	@Override
+	public void keyTyped(final KeyEvent e)
+	{
+	}
+
+	@Override
+	public void keyPressed(final KeyEvent e)
+	{
+		if (config.minimizeKeybind().matches(e))
+		{
+			minimizeWindow();
+			return;
+		}
+
+		if (config.holdToPreventMinimizeKeybind().matches(e))
+		{
+			preventMinimize = true;
+		}
+	}
+
+	@Override
+	public void keyReleased(final KeyEvent e)
+	{
+		if (config.holdToPreventMinimizeKeybind().matches(e))
+		{
+			preventMinimize = false;
+		}
 	}
 
 	@Provides
-	ClickToMinimizeConfig provideConfig(ConfigManager configManager)
+	ClickToMinimizeConfig provideConfig(final ConfigManager configManager)
 	{
 		return configManager.getConfig(ClickToMinimizeConfig.class);
 	}
 
-	public Map<String, List<String>> parseActions(String actionConfig, boolean ignoreCase) {
-		Map<String, List<String>> actionsMap = new HashMap<>();
-		String[] actions = actionConfig.split(",");
-		for (String action : actions) {
-			String[] parts = action.trim().replace("\\:", "[COLON]").split(":");
-			if (parts.length == 2) {
-				String key = ignoreCase ? parts[0].trim().replace("[COLON]", ":").toLowerCase() : parts[0].trim().replace("[COLON]", ":");
-				String value = ignoreCase ? parts[1].trim().toLowerCase() : parts[1].trim();
-				actionsMap.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
-			}
-		}
-		return actionsMap;
-	}
-
 	@Subscribe
-	public void onMenuOptionClicked(MenuOptionClicked event)
+	public void onConfigChanged(final ConfigChanged e)
 	{
-		if (keyListener.isPreventMinimizeHeld())
+		if (!e.getGroup().equals(ClickToMinimizeConfig.CONFIG_GROUP))
 		{
-			return; // Exit early if the key is held
-		}
-
-		boolean ignoreCase = config.ignoreCase();
-		boolean checkNoTargets = config.checkNoTargets();
-		Map<String, List<String>> actionsMap = parseActions(config.actions(), ignoreCase);
-		String action = ignoreCase ? removeTags(event.getMenuOption()).toLowerCase() : removeTags(event.getMenuOption());
-		String target = ignoreCase ? removeTags(event.getMenuTarget()).toLowerCase() : removeTags(event.getMenuTarget());
-
-		// Log the player's action if the option is enabled
-		if (config.logPlayerActions()) {
-			chatMessageManager.queue(QueuedMessage.builder()
-					.type(ChatMessageType.GAMEMESSAGE)
-					.runeLiteFormattedMessage("Click To Minimize, logging action on target: \"" + event.getMenuOption() + ": " + event.getMenuTarget() + "\"")
-					.build());
-		}
-
-		for (Map.Entry<String, List<String>> entry : actionsMap.entrySet()) {
-			String configAction = entry.getKey();
-			List<String> configTargets = entry.getValue();
-
-			if (action.equals(configAction)) {
-				for (String configTarget : configTargets) {
-					if (target.contains(configTarget) || (checkNoTargets && target.isEmpty())) {
-						minimizeWindow();
-						return;
-					}
-				}
-			}
-		}
-	}
-
-	public boolean isInventoryFull() {
-		int itemCount = client.getItemContainer(InventoryID.INVENTORY).count();
-		return itemCount >= 28;
-	}
-
-	public void minimizeWindow() {
-		if (config.ignoreFullInventory() && isInventoryFull()) {
-			log.info("Inventory is full. Skipping window minimize.");
 			return;
 		}
 
-		JFrame frame = (JFrame) javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas());
-		if (frame != null) {
-			if (config.sendToBack()) {
-				frame.toBack();
-			} else {
-				frame.setState(Frame.ICONIFIED);
+		if (e.getKey().equals(ClickToMinimizeConfig.CONFIG_KEY_ACTIONS))
+		{
+			updateActions();
+		}
+	}
+
+	@Subscribe
+	public void onMenuOptionClicked(final MenuOptionClicked event)
+	{
+		if (preventMinimize || (config.ignoreFullInventory() && isInventoryFull()))
+		{
+			return;
+		}
+
+		var action = removeTags(event.getMenuOption());
+		var target = removeTags(event.getMenuTarget());
+
+		if (config.logPlayerActions())
+		{
+			chatMessageManager.queue(QueuedMessage.builder()
+				.type(ChatMessageType.GAMEMESSAGE)
+				.runeLiteFormattedMessage("[Click To Minimize] Logged action: <col=FF0000>" + action + ": " + target + "</col>")
+				.build());
+		}
+
+		if (config.ignoreCase())
+		{
+			action = action.toLowerCase();
+			target = target.toLowerCase();
+		}
+
+		for (final var entry : actionsMap.entrySet())
+		{
+			if (!action.equals(entry.getKey()))
+			{
+				continue;
 			}
 
-			long currentTime = System.nanoTime();
-			// Check if enough time has passed since the last message (5 seconds)
-			if (config.sendChatMessage() && (currentTime - lastMessageTime) >= 5_000_000_000L) {
-				chatMessageManager.queue(QueuedMessage.builder()
-						.type(ChatMessageType.GAMEMESSAGE)
-						.runeLiteFormattedMessage("Window has been minimized by the Click To Minimize plugin.")
-						.build());
-
-				// Update the last message time
-				lastMessageTime = currentTime;
+			if (target.isEmpty())
+			{
+				if (config.allowEmptyMenuTarget())
+				{
+					minimizeWindow();
+				}
 			}
-		} else {
-			log.warn("No frame found to minimize!");
+			else
+			{
+				for (final var configTarget : entry.getValue())
+				{
+					if (target.contains(configTarget))
+					{
+						minimizeWindow();
+						break;
+					}
+				}
+			}
+
+			break;
+		}
+	}
+
+	private boolean isInventoryFull()
+	{
+		final var container = client.getItemContainer(InventoryID.INV);
+		return container != null && container.count() >= 28;
+	}
+
+	private void minimizeWindow()
+	{
+		final var frame = (JFrame) javax.swing.SwingUtilities.getWindowAncestor(client.getCanvas());
+		if (frame == null)
+		{
+			return;
+		}
+
+		if (config.sendToBack())
+		{
+			frame.toBack();
+		}
+		else
+		{
+			frame.setState(Frame.ICONIFIED);
+		}
+	}
+
+	private void updateActions()
+	{
+		actionsMap.clear();
+
+		for (final var action : config.actions().split(","))
+		{
+			final var parts = action.trim().replace("\\:", "[COLON]").split(":");
+			if (parts.length != 2)
+			{
+				continue;
+			}
+
+			var key = parts[0].trim().replace("[COLON]", ":");
+			var value = parts[1].trim();
+
+			if (config.ignoreCase())
+			{
+				key = key.toLowerCase();
+				value = value.toLowerCase();
+			}
+
+			actionsMap.computeIfAbsent(key, k -> new ArrayList<>()).add(value);
 		}
 	}
 }
